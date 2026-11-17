@@ -1,85 +1,125 @@
 import express from 'express';
+import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import Datastore from 'nedb-promises';
+import User from './models/User.js';
+import Book from './models/Book.js';
 
 dotenv.config();
 
 const app = express();
-app.use(cors());
+
+app.use(cors({
+  origin: process.env.FRONTEND_URL || '*'
+}));
 app.use(express.json());
 
-// Initialize Local Embedded Databases (automatically creates .db files in backend)
-const Users = Datastore.create({ filename: './users.db', autoload: true });
-const Books = Datastore.create({ filename: './books.db', autoload: true });
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log('Connected to MongoDB'))
+  .catch((err) => console.error('MongoDB connection error:', err));
 
-console.log('Embedded Local Database Connected Successfully!');
-
-// Auth Routes
 app.post('/api/signup', async (req, res) => {
   try {
-    const { username, password } = req.body;
-    if (!username || !password) return res.status(400).json({ message: 'All fields are required' });
-    
-    const existingUser = await Users.findOne({ username });
-    if (existingUser) return res.status(400).json({ message: 'Username already exists' });
-
-    await Users.insert({ username, password });
-    res.status(201).json({ message: 'User registered successfully' });
+    const { name, email, password } = req.body;
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: 'All fields are required' });
+    }
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ message: 'User already exists with this email' });
+    }
+    const user = await User.create({ name, email, password });
+    res.status(201).json({
+      message: 'Signup successful',
+      user: { id: user._id, name: user.name, email: user.email }
+    });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: 'Server error during signup', error: error.message });
   }
 });
 
 app.post('/api/login', async (req, res) => {
   try {
-    const { username, password } = req.body;
-    const user = await Users.findOne({ username, password });
-    if (!user) return res.status(400).json({ message: 'Invalid credentials' });
-
-    res.json({ message: 'Login successful', username: user.username });
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email and password are required' });
+    }
+    const user = await User.findOne({ email, password });
+    if (!user) {
+      return res.status(401).json({ message: 'Invalid email or password' });
+    }
+    res.json({
+      message: 'Login successful',
+      user: { id: user._id, name: user.name, email: user.email }
+    });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: 'Server error during login', error: error.message });
   }
 });
 
-// Book Routes
 app.get('/api/books', async (req, res) => {
   try {
-    const books = await Books.find({});
+    const { search } = req.query;
+    let query = {};
+    if (search) {
+      query = {
+        $or: [
+          { title: { $regex: search, $options: 'i' } },
+          { author: { $regex: search, $options: 'i' } }
+        ]
+      };
+    }
+    const books = await Book.find(query).sort({ createdAt: -1 });
     res.json(books);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: 'Failed to fetch books', error: error.message });
   }
 });
 
 app.post('/api/books', async (req, res) => {
   try {
     const { title, author, category, status } = req.body;
-    const book = await Books.insert({ title, author, category, status });
-    res.status(201).json(book);
+    if (!title || !author || !category) {
+      return res.status(400).json({ message: 'Title, author, and category are required' });
+    }
+    const newBook = await Book.create({
+      title,
+      author,
+      category,
+      status: status || 'Available'
+    });
+    res.status(201).json(newBook);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: 'Failed to add book', error: error.message });
   }
 });
 
 app.put('/api/books/:id', async (req, res) => {
   try {
-    const id = req.params.id;
-    await Books.update({ _id: id }, { $set: req.body });
-    const updatedBook = await Books.findOne({ _id: id });
+    const { title, author, category, status } = req.body;
+    const updatedBook = await Book.findByIdAndUpdate(
+      req.params.id,
+      { title, author, category, status },
+      { new: true, runValidators: true }
+    );
+    if (!updatedBook) {
+      return res.status(404).json({ message: 'Book not found' });
+    }
     res.json(updatedBook);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: 'Failed to update book', error: error.message });
   }
 });
 
 app.delete('/api/books/:id', async (req, res) => {
   try {
-    await Books.remove({ _id: req.params.id }, {});
+    const deletedBook = await Book.findByIdAndDelete(req.params.id);
+    if (!deletedBook) {
+      return res.status(404).json({ message: 'Book not found' });
+    }
     res.json({ message: 'Book deleted successfully' });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: 'Failed to delete book', error: error.message });
   }
 });
 

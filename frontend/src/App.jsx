@@ -1,61 +1,81 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
+import './App.css';
 
-const API_BASE_URL = "https://library-management-system-y876.onrender.com";
-export default function App() {
-  const [user, setUser] = useState(null);
-  const [isSignUp, setIsSignUp] = useState(false);
-  const [authData, setAuthData] = useState({ username: '', password: '' });
-  
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+
+function App() {
+  const [user, setUser] = useState(() => {
+    const saved = localStorage.getItem('libraryUser');
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [isSignup, setIsSignup] = useState(false);
+  const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' });
+  const [authError, setAuthError] = useState('');
+
   const [books, setBooks] = useState([]);
   const [search, setSearch] = useState('');
+  const [bookForm, setBookForm] = useState({
+    title: '',
+    author: '',
+    category: '',
+    status: 'Available'
+  });
   const [editingId, setEditingId] = useState(null);
-  const [bookForm, setBookForm] = useState({ title: '', author: '', category: '', status: 'Available' });
+  const [bookError, setBookError] = useState('');
 
-  // Handle Auth Form Submission
-  const handleAuth = async (e) => {
-    e.preventDefault();
-    const endpoint = isSignUp ? '/signup' : '/login';
+  const fetchBooks = async (searchQuery = '') => {
     try {
-      const res = await fetch(`${API_BASE_URL}${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(authData)
-      });
+      const res = await fetch(`${API_URL}/books?search=${encodeURIComponent(searchQuery)}`);
       const data = await res.json();
-      if (!res.ok) throw new Error(data.message);
-
-      if (isSignUp) {
-        alert('Account created! Please log in.');
-        setIsSignUp(false);
-      } else {
-        setUser(data.username);
-        fetchBooks();
-      }
+      if (res.ok) setBooks(data);
     } catch (err) {
-      alert(err.message);
-    }
-  };
-
-  // Fetch all books
-  const fetchBooks = async () => {
-    try {
-      const res = await fetch(`${API_BASE_URL}/books`);
-      const data = await res.json();
-      setBooks(data);
-    } catch (err) {
-      console.error(err);
+      console.error('Error fetching books:', err);
     }
   };
 
   useEffect(() => {
-    if (user) fetchBooks();
-  }, [user]);
+    if (user) {
+      fetchBooks(search);
+    }
+  }, [user, search]);
 
-  // Handle Add/Edit Book
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    setAuthError('');
+    const endpoint = isSignup ? '/signup' : '/login';
+
+    try {
+      const res = await fetch(`${API_URL}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(authForm)
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setAuthError(data.message || 'Authentication failed');
+        return;
+      }
+
+      setUser(data.user);
+      localStorage.setItem('libraryUser', JSON.stringify(data.user));
+      setAuthForm({ name: '', email: '', password: '' });
+    } catch {
+      setAuthError('Cannot connect to server. Make sure backend is running.');
+    }
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    localStorage.removeItem('libraryUser');
+  };
+
   const handleBookSubmit = async (e) => {
     e.preventDefault();
+    setBookError('');
+
+    const url = editingId ? `${API_URL}/books/${editingId}` : `${API_URL}/books`;
     const method = editingId ? 'PUT' : 'POST';
-    const url = editingId ? `${API_BASE_URL}/books/${editingId}` : `${API_BASE_URL}/books`;
 
     try {
       const res = await fetch(url, {
@@ -63,181 +83,219 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(bookForm)
       });
-      if (!res.ok) throw new Error('Failed to save book');
-      
+      const data = await res.json();
+
+      if (!res.ok) {
+        setBookError(data.message || 'Operation failed');
+        return;
+      }
+
       setBookForm({ title: '', author: '', category: '', status: 'Available' });
       setEditingId(null);
-      fetchBooks();
-    } catch (err) {
-      alert(err.message);
+      fetchBooks(search);
+    } catch {
+      setBookError('Server error while saving book.');
     }
   };
 
-  // Edit action setup
   const startEdit = (book) => {
     setEditingId(book._id);
-    setBookForm({ title: book.title, author: book.author, category: book.category, status: book.status });
+    setBookForm({
+      title: book.title,
+      author: book.author,
+      category: book.category,
+      status: book.status
+    });
   };
 
-  // Delete Book
-  const deleteBook = async (id) => {
-    if (!window.confirm('Are you sure you want to delete this book?')) return;
-    try {
-      await fetch(`${API_BASE}/books/${id}`, { method: 'DELETE' });
-      fetchBooks();
-    } catch (err) {
-      alert('Error deleting book');
-    }
+  const cancelEdit = () => {
+    setEditingId(null);
+    setBookForm({ title: '', author: '', category: '', status: 'Available' });
   };
 
-  // Toggle Availability Status
   const toggleStatus = async (book) => {
-    const updatedStatus = book.status === 'Available' ? 'Issued' : 'Available';
+    const newStatus = book.status === 'Available' ? 'Issued' : 'Available';
     try {
-      await fetch(`${API_BASE}/books/${book._id}`, {
+      const res = await fetch(`${API_URL}/books/${book._id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...book, status: updatedStatus })
+        body: JSON.stringify({ ...book, status: newStatus })
       });
-      fetchBooks();
+      if (res.ok) fetchBooks(search);
     } catch (err) {
-      alert('Error updating status');
+      console.error('Error toggling status:', err);
     }
   };
 
-  // Filter books by title or author
-  const filteredBooks = books.filter(b => 
-    b.title.toLowerCase().includes(search.toLowerCase()) ||
-    b.author.toLowerCase().includes(search.toLowerCase())
-  );
+  const deleteBook = async (id) => {
+    try {
+      const res = await fetch(`${API_URL}/books/${id}`, { method: 'DELETE' });
+      if (res.ok) fetchBooks(search);
+    } catch (err) {
+      console.error('Error deleting book:', err);
+    }
+  };
 
   if (!user) {
     return (
-      <div className="auth-box">
-        <h2>{isSignUp ? 'Sign Up' : 'Login'}</h2>
-        <form onSubmit={handleAuth}>
-          <input 
-            type="text" 
-            placeholder="Username" 
-            value={authData.username} 
-            onChange={e => setAuthData({ ...authData, username: e.target.value })} 
-            required 
+      <div className="auth-card">
+        <h2>{isSignup ? 'Library Sign Up' : 'Library Login'}</h2>
+        {authError && <div className="error-msg">{authError}</div>}
+        <form onSubmit={handleAuthSubmit}>
+          {isSignup && (
+            <input
+              type="text"
+              placeholder="Full Name"
+              value={authForm.name}
+              onChange={(e) => setAuthForm({ ...authForm, name: e.target.value })}
+              required
+            />
+          )}
+          <input
+            type="email"
+            placeholder="Email Address"
+            value={authForm.email}
+            onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
+            required
           />
-          <input 
-            type="password" 
-            placeholder="Password" 
-            value={authData.password} 
-            onChange={e => setAuthData({ ...authData, password: e.target.value })} 
-            required 
+          <input
+            type="password"
+            placeholder="Password"
+            value={authForm.password}
+            onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+            required
           />
-          <button type="submit" style={{ width: '100%', marginTop: '10px' }}>
-            {isSignUp ? 'Create Account' : 'Login'}
+          <button type="submit" className="btn-primary" style={{ width: '100%' }}>
+            {isSignup ? 'Create Account' : 'Login'}
           </button>
         </form>
-        <div className="switch-mode" onClick={() => setIsSignUp(!isSignUp)}>
-          {isSignUp ? 'Already have an account? Login' : "Don't have an account? Sign Up"}
-        </div>
+        <button
+          className="link-btn"
+          onClick={() => {
+            setIsSignup(!isSignup);
+            setAuthError('');
+          }}
+        >
+          {isSignup ? 'Already have an account? Login' : "Don't have an account? Sign Up"}
+        </button>
       </div>
     );
   }
 
   return (
     <div className="container">
-      <div className="header">
-        <h1>Library Management System</h1>
+      <div className="navbar">
+        <h2>Book Library Management</h2>
         <div>
-          <span>Welcome, <strong>{user}</strong></span>
-          <button className="secondary" onClick={() => setUser(null)} style={{ marginLeft: '10px' }}>
-            Logout
-          </button>
+          <span style={{ marginRight: '15px' }}>Welcome, {user.name}</span>
+          <button className="btn-danger" onClick={handleLogout}>Logout</button>
         </div>
       </div>
 
-      <form onSubmit={handleBookSubmit} className="form-grid">
-        <input 
-          type="text" 
-          placeholder="Title" 
-          value={bookForm.title} 
-          onChange={e => setBookForm({ ...bookForm, title: e.target.value })} 
-          required 
-        />
-        <input 
-          type="text" 
-          placeholder="Author" 
-          value={bookForm.author} 
-          onChange={e => setBookForm({ ...bookForm, author: e.target.value })} 
-          required 
-        />
-        <input 
-          type="text" 
-          placeholder="Category" 
-          value={bookForm.category} 
-          onChange={e => setBookForm({ ...bookForm, category: e.target.value })} 
-          required 
-        />
-        <select 
-          value={bookForm.status} 
-          onChange={e => setBookForm({ ...bookForm, status: e.target.value })}
-        >
-          <option value="Available">Available</option>
-          <option value="Issued">Issued</option>
-        </select>
-        <div style={{ gridColumn: '1 / -1' }}>
-          <button type="submit">{editingId ? 'Update Book' : 'Add Book'}</button>
-          {editingId && (
-            <button type="button" className="secondary" onClick={() => { setEditingId(null); setBookForm({ title: '', author: '', category: '', status: 'Available' }); }}>
-              Cancel
+      <div className="card">
+        <h3>{editingId ? 'Edit Book' : 'Add New Book'}</h3>
+        {bookError && <div className="error-msg" style={{ marginTop: '10px' }}>{bookError}</div>}
+        <form onSubmit={handleBookSubmit} className="form-grid">
+          <input
+            type="text"
+            placeholder="Book Title"
+            value={bookForm.title}
+            onChange={(e) => setBookForm({ ...bookForm, title: e.target.value })}
+            required
+          />
+          <input
+            type="text"
+            placeholder="Author"
+            value={bookForm.author}
+            onChange={(e) => setBookForm({ ...bookForm, author: e.target.value })}
+            required
+          />
+          <input
+            type="text"
+            placeholder="Category (e.g. Fiction, CS)"
+            value={bookForm.category}
+            onChange={(e) => setBookForm({ ...bookForm, category: e.target.value })}
+            required
+          />
+          <select
+            value={bookForm.status}
+            onChange={(e) => setBookForm({ ...bookForm, status: e.target.value })}
+          >
+            <option value="Available">Available</option>
+            <option value="Issued">Issued</option>
+          </select>
+          <div className="actions">
+            <button type="submit" className="btn-primary">
+              {editingId ? 'Update Book' : 'Add Book'}
             </button>
-          )}
+            {editingId && (
+              <button type="button" className="btn-secondary" onClick={cancelEdit}>
+                Cancel
+              </button>
+            )}
+          </div>
+        </form>
+      </div>
+
+      <div className="card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '15px' }}>
+          <h3>Library Catalog ({books.length})</h3>
+          <input
+            type="text"
+            placeholder="Search by title or author..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{ maxWidth: '320px' }}
+          />
         </div>
-      </form>
 
-      <input 
-        type="text" 
-        className="search-bar" 
-        placeholder="Search books by title or author..." 
-        value={search} 
-        onChange={e => setSearch(e.target.value)} 
-      />
-
-      <table>
-        <thead>
-          <tr>
-            <th>Title</th>
-            <th>Author</th>
-            <th>Category</th>
-            <th>Status</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {filteredBooks.length > 0 ? (
-            filteredBooks.map(book => (
-              <tr key={book._id}>
-                <td>{book.title}</td>
-                <td>{book.author}</td>
-                <td>{book.category}</td>
-                <td>
-                  <button 
-                    className={book.status === 'Available' ? '' : 'secondary'} 
-                    onClick={() => toggleStatus(book)}
-                  >
-                    {book.status}
-                  </button>
-                </td>
-                <td>
-                  <button onClick={() => startEdit(book)}>Edit</button>
-                  <button className="danger" onClick={() => deleteBook(book._id)}>Delete</button>
+        <table>
+          <thead>
+            <tr>
+              <th>Title</th>
+              <th>Author</th>
+              <th>Category</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {books.length === 0 ? (
+              <tr>
+                <td colSpan="5" style={{ textAlign: 'center', padding: '20px' }}>
+                  No books found.
                 </td>
               </tr>
-            ))
-          ) : (
-            <tr>
-              <td colSpan="5" style={{ textAlign: 'center' }}>No books found</td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+            ) : (
+              books.map((book) => (
+                <tr key={book._id}>
+                  <td>{book.title}</td>
+                  <td>{book.author}</td>
+                  <td>{book.category}</td>
+                  <td>
+                    <span className={`badge ${book.status === 'Available' ? 'badge-available' : 'badge-issued'}`}>
+                      {book.status}
+                    </span>
+                  </td>
+                  <td className="actions">
+                    <button className="btn-success" onClick={() => toggleStatus(book)}>
+                      Mark {book.status === 'Available' ? 'Issued' : 'Available'}
+                    </button>
+                    <button className="btn-warning" onClick={() => startEdit(book)}>
+                      Edit
+                    </button>
+                    <button className="btn-danger" onClick={() => deleteBook(book._id)}>
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
+
+export default App;
